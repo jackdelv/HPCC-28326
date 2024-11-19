@@ -34,7 +34,7 @@ logger = logging.getLogger('RegressionTestEngine')
 class ECLcmd(Shell):
     def __init__(self):
         self.defaults = []
-        self.cmd = 'ecl'
+        self.cmd = '/home/jack/dev/debug/opt/HPCCSystems/bin/ecl'
         self.config = getConfig()
 
     def __ECLcmd(self):

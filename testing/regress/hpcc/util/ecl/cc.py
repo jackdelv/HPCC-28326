@@ -30,7 +30,7 @@ class ECLCC(Shell):
     def __init__(self):
         super().__init__()
         self.defaults = []
-        self.cmd = 'eclcc'
+        self.cmd = '/home/jack/dev/debug/opt/HPCCSystems/bin/eclcc'
         self.makeArchiveError=''
 
     def __ECLCC(self):

@@ -121,7 +121,7 @@ def addCommonEclArgs(args):
 
 def queryWuid(jobname,  taskId):
     shell = Shell()
-    cmd = 'ecl'
+    cmd = '/home/jack/dev/debug/opt/HPCCSystems/bin/ecl'
     defaults = []
     args = []
     args.append('status')
@@ -355,7 +355,7 @@ def checkHpccStatus():
     try:
         if isLocal:
             # There is no remote version (yet)
-            myProc = subprocess.Popen(["ecl --version"],  shell=True,  bufsize=8192,  stdout=subprocess.PIPE,  stderr=subprocess.PIPE)
+            myProc = subprocess.Popen(["/home/jack/dev/debug/opt/HPCCSystems/bin/ecl --version"],  shell=True,  bufsize=8192,  stdout=subprocess.PIPE,  stderr=subprocess.PIPE)
             result = myProc.stdout.read() + myProc.stderr.read()
             results = result.decode("utf-8").split('\n')
             for line in results:
@@ -371,7 +371,7 @@ def checkHpccStatus():
         args = []
         addCommonEclArgs(args)
 
-        myProc = subprocess.Popen("ecl getname --wuid 'W*' --limit=5 " + " ".join(args),  shell=True,  bufsize=8192,  stdout=subprocess.PIPE,  stderr=subprocess.PIPE)
+        myProc = subprocess.Popen("/home/jack/dev/debug/opt/HPCCSystems/bin/ecl getname --wuid 'W*' --limit=5 " + " ".join(args),  shell=True,  bufsize=8192,  stdout=subprocess.PIPE,  stderr=subprocess.PIPE)
         result  = myProc.stdout.read() + myProc.stderr.read()
         results = result.decode("utf-8").split('\n')
         for line in results:
