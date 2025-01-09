@@ -11,8 +11,10 @@
     limitations under the License.
 ############################################################################## */
 
-//class=parquet //nothor
+//class=parquet
+//nothor
 //noroxie
+
 IMPORT Std;
 IMPORT Parquet;
 
@@ -35,8 +37,8 @@ ParquetIO.Write(stringData, parquetFilePath, TRUE);
 parquetString := ParquetIO.Read(layout, parquetFilePath);
 
 result := JOIN(stringData, parquetString,
-              TRIM(LEFT.s1) = TRIM(RIGHT.s1) AND 
-              TRIM(LEFT.s2) = TRIM(RIGHT.s2) AND 
+              TRIM(LEFT.s1) = TRIM(RIGHT.s1) AND
+              TRIM(LEFT.s2) = TRIM(RIGHT.s2) AND
               TRIM(LEFT.s3) = TRIM(RIGHT.s3),
               TRANSFORM(layout,
                    SELF := LEFT
