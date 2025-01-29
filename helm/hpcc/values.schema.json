@@ -3016,6 +3016,16 @@
         "type": "object",
         "allOf": [{ "$ref": "#/definitions/sashacommon" }],
         "properties": {
+          "eclwatchProvider": {
+            "type": "boolean",
+            "description": "Run xref using saxref if true",
+            "default": true
+          },
+          "checkSuperFiles": {
+            "type": "boolean",
+            "description": "Check superfiles when running XRef",
+            "default": false
+          },
           "disabled": {}
         },
         "additionalProperties": false
