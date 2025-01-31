@@ -81,8 +81,91 @@ public:
     virtual RecordTranslationMode queryTranslationMode() const = 0;
     virtual bool matches(const IRowWriteFormatMapping * other) const = 0;
 };
-THORHELPER_API IRowWriteFormatMapping * createDiskReadOutputMapping(RecordTranslationMode mode, unsigned expectedCrc, IOutputMetaData & expected, unsigned projectedCrc, IOutputMetaData & projected);
+THORHELPER_API IRowWriteFormatMapping * createRowWriteFormatMapping(RecordTranslationMode mode, unsigned expectedCrc, IOutputMetaData & expected, unsigned projectedCrc, IOutputMetaData & projected);
 
+interface ILogicalRowStream : extends IRowStream
+{
+// Defined in IRowStream, here for documentation:
+// Request a row which is owned by the caller, and must be freed once it is finished with.
+    virtual const void *nextRow() override =0;
+    virtual void stop() override = 0;                              // after stop called NULL is returned
+
+    virtual bool getCursor(MemoryBuffer & cursor) = 0;
+    virtual void setCursor(MemoryBuffer & cursor) = 0;
+
+// rows returned are only valid until next call.  Size is the number of bytes in the row.
+    virtual const void * prefetchRow(size32_t & size)=0;
+    virtual const void * nextRow(MemoryBufferBuilder & builder)=0;   // rename to buildRow??
+    // rows returned are created in the target buffer.  This should be generalized to an ARowBuilder
+};
+
+typedef IConstArrayOf<IFieldFilter> FieldFilterArray;
+//Would IRowSource or IFormattedRowSource be a better name??
+interface IRowReaderSource : extends IInterface
+{
+    // Create a filtered set of records - keyed joins will call this from multiple threads.
+    // outputAllocator can be null if allocating nextRow() is not used.
+    virtual ILogicalRowStream * createRowStream(IEngineRowAllocator * optOutputAllocator, const FieldFilterArray & expectedFilter) = 0;
+};
+
+//This is the interface for receiving a stream of logical rows within the engines.
+interface ILogicalRowSink : extends IRowWriterEx
+{
+// Defined in IRowWriterEx, here for documentation:
+    virtual void putRow(const void * ownedRow) override = 0;  // takes ownership of row.  rename to putOwnedRow?
+    virtual void flush() override = 0;
+    virtual void noteStopped() override = 0;
+    virtual void writeRow(const void *row) = 0;         // does not take ownership of row, row may not be linkable, or live beyond the next call
+};
+
+//This interface makes the structure symetric with IRowReaderSource, but I am not sure that it provides any benefit
+//Worth reviewing later.
+//This interface is used to encapsulate writing to a specific target in a particular format
+interface IRowWriterTarget : extends IInterface
+{
+    virtual ILogicalRowSink * createRowSink() = 0;
+};
+
+interface INewRowProvider
+{
+    virtual const char * queryName() const = 0;
+    virtual IRowReaderSource * createSource(IRowReadFormatMapping * mapping, unsigned whichNode, unsigned numNodes, bool readAllParts) = 0;
+    virtual IRowWriterTarget * createTarget(IRowWriteFormatMapping * mapping, unsigned whichNode, unsigned numNodes) = 0;
+};
+
+extern THORHELPER_API INewRowProvider * createRowProvider(const char * name, IPropertyTree * options, unsigned whichNode, unsigned curNode, bool global);
+
+// The helper functions needed by the code generator and the platform
+// base class has filename, flags, expected formats etc.
+struct IHThorGenericDiskReadArg : extends IHThorDiskReadBaseArg
+{
+    //more: flag to indicate if format/provider options are dependent on the context for unusual cases?
+
+    virtual const char * queryFormat() = 0;                         // not needed for unified provider
+    virtual void getFormatOptions(IXmlWriter & options) = 0;        // not needed for unified provider
+    virtual const char * queryProvider() = 0;
+    virtual void getProviderOptions(IXmlWriter & options) = 0;
+};
+
+
+struct IHThorGenericDiskWriteArg : extends IHThorDiskWriteArg
+{
+    //more: flag to indicate if format/provider options are dependent on the context for unusual cases?
+    virtual const char * queryFormat() = 0;                         // not needed for unified provider
+    virtual void getFormatOptions(IXmlWriter & options) = 0;        // not needed for unified provider
+    virtual const char * queryProvider() = 0;
+    virtual void getProviderOptions(IXmlWriter & options) = 0;
+};
+
+
+struct IHThorGenericJoinArg : public IHThorAnyJoinBaseArg
+{
+    virtual void createSegmentMonitors(IIndexReadContext *ctx, const void *lhs) = 0; // create filter on un-projected rhs
+    virtual IOutputMetaData * queryProjectedRight() = 0;                // Which fields are actually required by the transform
+    virtual ICompare * queryCompareLeftRight()=0;                       // compare left with the projected right
+
+    //other join functions for options, and transform() to join the left and projected right
+};
 
 //--------------------------------------------------------------------------------------------------------------------
 

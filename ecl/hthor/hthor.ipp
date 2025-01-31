@@ -2968,9 +2968,10 @@ protected:
 
     IHThorNewDiskReadBaseArg &helper;
     IHThorCompoundBaseArg & segHelper;
-    IDiskRowReader * activeReader = nullptr;
-    IArrayOf<IDiskRowReader> readers;
-    IDiskRowStream * inputRowStream = nullptr;
+    INewRowProvider * activeProvider = nullptr;
+    IArrayOf<INewRowProvider> providers;
+    IRowReaderSource * inputRowReaderSource = nullptr;
+    ILogicalRowStream * inputRowStream = nullptr;
     StringBuffer mangledHelperFileName;
     StringAttr tempFileName;
     const char * logicalFileName = "";
@@ -3041,7 +3042,7 @@ public:
 
 protected:
     bool openFirstPart();
-    void initStream(IDiskRowReader * reader, const char * filename);
+    void initStream(INewRowProvider * reader, IRowReadFormatMapping * mapping);
     InputFileInfo * extractFileInformation(IDistributedFile * fileDesc, const IPropertyTree * curFormatOptions, const IPropertyTree * curProviderOptions);
     bool openFilePart(const char * filename);
     bool openFilePart(ILocalOrDistributedFile * localFile, IDistributedFilePart * filePart, unsigned whichPart);
@@ -3052,7 +3053,6 @@ protected:
     virtual void closepart();
 
     bool openNextPart(bool prevWasMissing);
-    IDiskRowReader * ensureRowReader(const char * format, bool streamRemote, unsigned expectedCrc, IOutputMetaData & expected, unsigned projectedCrc, IOutputMetaData & projected, unsigned actualCrc, IOutputMetaData & actual, const IPropertyTree * formatOptions);
 };
 
 

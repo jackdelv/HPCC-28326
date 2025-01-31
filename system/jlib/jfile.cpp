@@ -7870,6 +7870,31 @@ extern IFileIO *createBlockedIO(IFileIO *base, size32_t blockSize)
 
 ///---------------------------------------------------------------------------------------------------------------------
 
+// Module-level global that will contain a list of provider names
+// (e.g. "cosmosdb", "posix") that are supported through the
+// INewRowProvider interface
+static StringArray providerTypeNameList;
+
+void addAvailableProviderTypeName(const char * name)
+{
+    providerTypeNameList.append(name);
+}
+
+// Determine if provider is defined; used by the ECL parser
+// MORE: needs to be changed, but I don't know where to change the compiler function
+bool hasGenericFiletypeName(const char * name)
+{
+    ForEachItemIn(idx, providerTypeNameList)
+    {
+        if (strieq(providerTypeNameList.item(idx), name))
+            return true;
+    }
+
+    return false;
+}
+
+///---------------------------------------------------------------------------------------------------------------------
+
 // Module-level global that will contain a list of pluggable file type
 // names (e.g. "parquet", "csv") that are supported through the
 // generic disk reader
@@ -7880,6 +7905,7 @@ void addAvailableGenericFileTypeName(const char * name)
     genericFileTypeNameList.append(name);
 }
 
+#if 0
 // Determine if file type is defined; used by the ECL parser
 bool hasGenericFiletypeName(const char * name)
 {
@@ -7891,7 +7917,7 @@ bool hasGenericFiletypeName(const char * name)
 
     return false;
 }
-
+#endif
 ///---------------------------------------------------------------------------------------------------------------------
 
 // Cache/update plane attributes settings

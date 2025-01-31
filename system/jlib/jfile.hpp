@@ -765,6 +765,11 @@ extern jlib_decl bool getFileSyncWriteCloseEnabled(const char *planeName);
 extern jlib_decl bool getConcurrentWriteSupported(const char *planeName);
 extern jlib_decl unsigned getWriteSyncMarginMs(const char * planeName);
 
+//---- Provider type related functions ----------------------------------------------------
+
+extern jlib_decl void addAvailableProviderTypeName(const char * name);
+// extern jlib_decl bool hasProviderTypeName(const char * name);
+
 //---- Pluggable file type related functions ----------------------------------------------
 
 extern jlib_decl void addAvailableGenericFileTypeName(const char * name);

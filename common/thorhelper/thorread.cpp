@@ -206,6 +206,266 @@ static IRowReadFormatMapping * createUnprojectedMapping(IRowReadFormatMapping * 
     return createRowReadFormatMapping(mapping->queryTranslationMode(), mapping->queryFormat(), mapping->getActualCrc(), *mapping->queryActualMeta(), mapping->getExpectedCrc(), *mapping->queryExpectedMeta(), mapping->getExpectedCrc(), *mapping->queryExpectedMeta(), mapping->queryFormatOptions());
 }
 
+//---------------------------------------------------------------------------------------------------------------------
+
+class CRowReaderSource : public CInterfaceOf<IRowReaderSource>, implements ILogicalRowStream
+{
+public:
+    CRowReaderSource(IRowReadFormatMapping * _mapping, unsigned _whichNode, unsigned _numNodes, bool _readAllParts)
+    : mapping(_mapping), whichNode(_whichNode), numNodes(_numNodes), readAllParts(_readAllParts){}
+    IMPLEMENT_IINTERFACE_USING(CInterfaceOf<IRowReaderSource>);
+
+    ILogicalRowStream * createRowStream(IEngineRowAllocator * _outputAllocator, const FieldFilterArray & expectedFilter) override;
+
+    // Defined in IRowStream, here for documentation:
+    // Request a row which is owned by the caller, and must be freed once it is finished with.
+    virtual const void *nextRow() override;
+    virtual void stop() override;                              // after stop called NULL is returned
+
+    virtual bool getCursor(MemoryBuffer & cursor) override;
+    virtual void setCursor(MemoryBuffer & cursor) override;
+
+    // rows returned are only valid until next call.  Size is the number of bytes in the row.
+    virtual const void * prefetchRow(size32_t & size) override;
+    virtual const void * nextRow(MemoryBufferBuilder & builder) override;   // rename to buildRow??
+    // rows returned are created in the target buffer.  This should be generalized to an ARowBuilder
+protected:
+    IRowReadFormatMapping * mapping;
+    unsigned whichNode;
+    unsigned numNodes;
+    bool readAllParts;
+    Owned<IEngineRowAllocator> outputAllocator;
+    const FieldFilterArray * expectedFilter;
+};
+
+ILogicalRowStream * CRowReaderSource::createRowStream(IEngineRowAllocator * _outputAllocator, const FieldFilterArray & _expectedFilter)
+{
+    outputAllocator.set(_outputAllocator);
+    expectedFilter = &_expectedFilter;
+    return this;
+}
+
+const void *CRowReaderSource::nextRow()
+{
+    return nullptr;
+}
+
+void CRowReaderSource::stop()
+{
+}
+
+bool CRowReaderSource::getCursor(MemoryBuffer & cursor)
+{
+    return false;
+}
+
+void CRowReaderSource::setCursor(MemoryBuffer & cursor)
+{
+}
+
+const void * CRowReaderSource::prefetchRow(size32_t & size)
+{
+    return nullptr;
+}
+
+const void * CRowReaderSource::nextRow(MemoryBufferBuilder & builder)
+{
+    return nullptr;
+}
+
+#ifdef _USE_PARQUET
+class CParquetActivityContext : public IThorActivityContext
+{
+public:
+    CParquetActivityContext(bool _local, unsigned _numWorkers, unsigned _curWorker)
+    : workers(_local ? 1 : _numWorkers), curWorker(_local ? 0 : _curWorker), local(_local)
+    {
+        assertex(curWorker < workers);
+    }
+
+    virtual bool isLocal() const override { return local; };
+    virtual unsigned numSlaves() const override { return workers; };
+    virtual unsigned numStrands() const override { return 1; };
+    virtual unsigned querySlave() const override { return curWorker; };
+    virtual unsigned queryStrand() const override { return 0; }; // 0 based 0..numStrands-1
+protected:
+    unsigned workers;
+    unsigned curWorker;
+    bool local;
+};
+
+StringBuffer & getLocalPath(StringBuffer & localPath, StringAttr & filename)
+{
+    if (filename.get())
+    {
+        if (startsWith(filename.get(), "file::"))
+        {
+            const char * c = filename.get() + 6;
+            const char * end = filename.get() + filename.length();
+            // Skip over ip. Not sure if it is always '.'
+            while (*c && *c != ':')
+                c++;
+            while (c < end)
+            {
+                if (*c == ':')
+                {
+                    localPath.append(PATHSEPCHAR);
+                    c += 2;
+                }
+                if (*c == '^')
+                {
+                    c++;
+                    localPath.append((char)toupper(*c));
+                    c++;
+                }
+                localPath.append(*c);
+                c++;
+            }
+        }
+        else
+            throw makeStringExceptionV(0, "Unsupported file name format: %s", filename.get());
+    }
+    return localPath;
+}
+class CParquetRowReaderSource : public CRowReaderSource
+{
+public:
+    CParquetRowReaderSource(const char * filename, IRowReadFormatMapping * mapping, unsigned whichNode, unsigned numNodes, bool readAllParts);
+
+    // Defined in IRowStream, here for documentation:
+    // Request a row which is owned by the caller, and must be freed once it is finished with.
+    virtual const void *nextRow() override;
+    virtual void stop() override;                              // after stop called NULL is returned
+
+    virtual bool getCursor(MemoryBuffer & cursor) override;
+    virtual void setCursor(MemoryBuffer & cursor) override;
+
+    // rows returned are only valid until next call.  Size is the number of bytes in the row.
+    virtual const void * prefetchRow(size32_t & size) override;
+    virtual const void * nextRow(MemoryBufferBuilder & builder) override;   // rename to buildRow??
+private:
+    StringAttr logicalFilename;
+    parquetembed::ParquetReader * parquetFileReader = nullptr;
+    CParquetActivityContext * parquetActivityCtx = nullptr;
+};
+
+CParquetRowReaderSource::CParquetRowReaderSource(const char * filename, IRowReadFormatMapping * mapping, unsigned whichNode, unsigned numNodes, bool readAllParts)
+: CRowReaderSource(mapping, whichNode, numNodes, readAllParts), logicalFilename(filename), parquetActivityCtx(new CParquetActivityContext(true, 1, 0))
+{
+    DBGLOG(0, "Opening File: %s", logicalFilename.str());
+    StringBuffer localFilename;
+    getLocalPath(localFilename, logicalFilename);
+    parquetFileReader = new parquetembed::ParquetReader("read", localFilename.str(), 50000, nullptr, parquetActivityCtx, mapping->queryExpectedMeta()->queryTypeInfo());
+    auto st = parquetFileReader->processReadFile();
+    if (!st.ok())
+        throw MakeStringException(0, "%s: %s.", st.CodeAsString().c_str(), st.message().c_str());
+}
+
+const void *CParquetRowReaderSource::nextRow()
+{
+    while (parquetFileReader->shouldRead())
+    {
+        parquetembed::TableColumns * table = nullptr;
+        auto index = parquetFileReader->next(table);
+
+        if (table && !table->empty())
+        {
+            parquetembed::ParquetRowBuilder pRowBuilder(table, index);
+
+            RtlDynamicRowBuilder rowBuilder(outputAllocator);
+            const RtlTypeInfo * typeInfo = outputAllocator->queryOutputMeta()->queryTypeInfo();
+            assertex(typeInfo);
+            RtlFieldStrInfo dummyField("<row>", NULL, typeInfo);
+            size32_t sizeRead = typeInfo->build(rowBuilder, 0, &dummyField, pRowBuilder);
+            roxiemem::OwnedConstRoxieRow next = rowBuilder.finalizeRowClear(sizeRead);
+            return next.getClear();
+        }
+    }
+    return nullptr;
+}
+
+void CParquetRowReaderSource::stop()
+{
+}
+
+bool CParquetRowReaderSource::getCursor(MemoryBuffer & cursor)
+{
+    return false;
+}
+
+void CParquetRowReaderSource::setCursor(MemoryBuffer & cursor)
+{
+}
+
+const void * CParquetRowReaderSource::prefetchRow(size32_t & size)
+{
+    return nullptr;
+}
+
+const void * CParquetRowReaderSource::nextRow(MemoryBufferBuilder & builder)
+{
+    return nullptr;
+}
+
+#endif
+class CNewRowProvider : implements INewRowProvider
+{
+public:
+    CNewRowProvider(const char * _filename, IPropertyTree * _options, unsigned _whichNode, unsigned _curNode, bool _global)
+    : filename(_filename), options(_options), whichNode(_whichNode), curNode(_curNode), global(_global) {}
+
+    const char * queryName() const override;
+    IRowReaderSource * createSource(IRowReadFormatMapping * mapping, unsigned whichNode, unsigned numNodes, bool readAllParts) override;
+    IRowWriterTarget * createTarget(IRowWriteFormatMapping * mapping, unsigned whichNode, unsigned numNodes) override;
+protected:
+    StringAttr filename;
+    Owned<IPropertyTree> options;
+    unsigned whichNode;
+    unsigned curNode;
+    bool global;
+};
+
+const char * CNewRowProvider::queryName() const
+{
+    return filename;
+}
+
+IRowReaderSource * CNewRowProvider::createSource(IRowReadFormatMapping * mapping, unsigned whichNode, unsigned numNodes, bool readAllParts)
+{
+    return nullptr;
+}
+
+IRowWriterTarget * CNewRowProvider::createTarget(IRowWriteFormatMapping * mapping, unsigned whichNode, unsigned numNodes)
+{
+    return nullptr;
+}
+
+class CPosixRowProvider : public CNewRowProvider
+{
+public:
+    CPosixRowProvider(const char * _filename, IPropertyTree * _options, unsigned _whichNode, unsigned _curNode, bool _global)
+    : CNewRowProvider(_filename, _options, _whichNode, _curNode, _global) {}
+
+    IRowReaderSource * createSource(IRowReadFormatMapping * mapping, unsigned whichNode, unsigned numNodes, bool readAllParts) override;
+    IRowWriterTarget * createTarget(IRowWriteFormatMapping * mapping, unsigned whichNode, unsigned numNodes) override;
+};
+
+IRowReaderSource * CPosixRowProvider::createSource(IRowReadFormatMapping * mapping, unsigned whichNode, unsigned numNodes, bool readAllParts)
+{
+    // MORE: For a posix provider what kind of formats are accepted?
+    // MORE: Should a similar type map be set up for supported posix formats?
+#ifdef _USE_PARQUET
+    if (strieq(mapping->queryFormatOptions()->queryProp("format"), PARQUET_FILE_TYPE_NAME))
+        return new CParquetRowReaderSource(filename, mapping, whichNode, numNodes, readAllParts);
+#endif
+    UNIMPLEMENTED;
+}
+
+IRowWriterTarget * CPosixRowProvider::createTarget(IRowWriteFormatMapping * mapping, unsigned whichNode, unsigned numNodes)
+{
+    UNIMPLEMENTED;
+}
+
 
 //---------------------------------------------------------------------------------------------------------------------
 
@@ -1584,26 +1844,6 @@ protected:
 
 //---------------------------------------------------------------------------------------------------------------------
 #ifdef _USE_PARQUET
-class CParquetActivityContext : public IThorActivityContext
-{
-public:
-    CParquetActivityContext(bool _local, unsigned _numWorkers, unsigned _curWorker)
-    : workers(_local ? 1 : _numWorkers), curWorker(_local ? 0 : _curWorker), local(_local)
-    {
-        assertex(curWorker < workers);
-    }
-
-    virtual bool isLocal() const override { return local; };
-    virtual unsigned numSlaves() const override { return workers; };
-    virtual unsigned numStrands() const override { return 1; };
-    virtual unsigned querySlave() const override { return curWorker; };
-    virtual unsigned queryStrand() const override { return 0; }; // 0 based 0..numStrands-1
-protected:
-    unsigned workers;
-    unsigned curWorker;
-    bool local;
-};
-
 /*
  * Base class for reading a Parquet local file
  */
@@ -1983,6 +2223,23 @@ void RemoteDiskRowReader::stop()
 {
 }
 
+//---------------------------------------------------------------------------------------------------------------------
+
+static std::map<std::string, std::function<CNewRowProvider*(const char *, IPropertyTree*, unsigned, unsigned, bool)>> providerTypeMap;
+
+INewRowProvider * createRowProvider(const char * name, IPropertyTree * options, unsigned whichNode, unsigned curNode, bool global)
+{
+    const char * providerType = options->queryProp("@providerType");
+    if (!providerType)
+        throw makeStringExceptionV(0, "No provider type specified");
+
+    auto foundProvider = providerTypeMap.find(providerType);
+    if (foundProvider != providerTypeMap.end() && foundProvider->second)
+        return foundProvider->second(name, options, whichNode, curNode, global);
+
+    UNIMPLEMENTED;
+}
+
 
 ///---------------------------------------------------------------------------------------------------------------------
 
@@ -2037,6 +2294,7 @@ IDiskRowReader * createDiskReader(const char * format, bool streamRemote, IRowRe
 
 MODULE_INIT(INIT_PRIORITY_STANDARD)
 {
+#if 0
     // All pluggable file types that use the generic disk reader
     // should be defined here; the key is the lowecase name of the format,
     // as will be used in ECL, and the value should be a lambda
@@ -2055,6 +2313,19 @@ MODULE_INIT(INIT_PRIORITY_STANDARD)
     // at compile time
     for (auto iter = genericFileTypeMap.begin(); iter != genericFileTypeMap.end(); iter++)
         addAvailableGenericFileTypeName(iter->first.c_str());
+#endif
+
+    // All provider types that use the INewRowProvider interface
+    // should be defined here; the key is the lowercase name of the provider,
+    // as will be used in ECL, and the value should be a lambda that
+    // creates the appropriate provider object
+    providerTypeMap.emplace("posix", [](const char * _filename, IPropertyTree * _options, unsigned _whichNode, unsigned _curNode, bool _globa) { return new CPosixRowProvider(_filename, _options, _whichNode, _curNode, _globa); });
+
+    // Stuff the file type names that were just instantiated into a list;
+    // list will be accessed by the ECL compiler to validate the names
+    // at compile time
+    for (auto iter = providerTypeMap.begin(); iter != providerTypeMap.end(); iter++)
+        addAvailableProviderTypeName(iter->first.c_str());
 
     return true;
 }

@@ -11001,7 +11001,6 @@ CHThorNewDiskReadBaseActivity::InputFileInfo * CHThorNewDiskReadBaseActivity::ex
         queryInheritProp(*fileFormatOptions, "terminator", options, "@csvTerminate");
         queryInheritProp(*fileFormatOptions, "escape", options, "@csvEscape");
 
-        throwUnexpected();
         dbglogXML(fileFormatOptions);
         dbglogXML(fileFormatOptions);
     }
@@ -11034,10 +11033,10 @@ void CHThorNewDiskReadBaseActivity::close()
 
 void CHThorNewDiskReadBaseActivity::closepart()
 {
-    if (activeReader)
+    if (activeProvider)
     {
-        activeReader->clearInput();
-        activeReader = nullptr;
+        // MORE: What cleanup can be done?
+        // activeProvider = nullptr;
     }
     logicalFileName = "";
 }
@@ -11135,48 +11134,34 @@ bool CHThorNewDiskReadBaseActivity::openNextPart(bool prevWasMissing)
     }
 }
 
-void CHThorNewDiskReadBaseActivity::initStream(IDiskRowReader * reader, const char * filename)
+void CHThorNewDiskReadBaseActivity::initStream(INewRowProvider * provider, IRowReadFormatMapping * mapping)
 {
-    activeReader = reader;
-    inputRowStream = reader->queryAllocatedRowStream(rowAllocator);
+    activeProvider = provider;
+    inputRowReaderSource = provider->createSource(mapping, 1, 1, false);
+    inputRowStream = inputRowReaderSource->createRowStream(rowAllocator, fieldFilters);
 
     StringBuffer report("Reading file ");
-    report.append(filename);
+    report.append(provider->queryName());
     agent.reportProgress(report.str());
 }
 
 void CHThorNewDiskReadBaseActivity::setEmptyStream()
 {
-    inputRowStream = queryNullDiskRowStream();
-    finishedParts = true;
-}
-
-IDiskRowReader * CHThorNewDiskReadBaseActivity::ensureRowReader(const char * format, bool streamRemote, unsigned expectedCrc, IOutputMetaData & expected, unsigned projectedCrc, IOutputMetaData & projected, unsigned actualCrc, IOutputMetaData & actual, const IPropertyTree * formatOptions)
-{
-    Owned<IRowReadFormatMapping> mapping = createRowReadFormatMapping(getLayoutTranslationMode(), format, actualCrc, actual, expectedCrc, expected, projectedCrc, projected, formatOptions);
-
-    ForEachItemIn(i, readers)
-    {
-        IDiskRowReader & cur = readers.item(i);
-        if (cur.matches(format, streamRemote, mapping))
-            return &cur;
-    }
-    IDiskRowReader * reader = createDiskReader(format, streamRemote, mapping);
-    readers.append(*reader);
-    return reader;
 }
 
 bool CHThorNewDiskReadBaseActivity::openFilePart(const char * filename)
 {
     const char * format = helper.queryFormat();   // more - should extract from the current file (could even mix flat and csv...)
-    InputFileInfo * fileInfo = &subfiles.item(0);
 
     unsigned expectedCrc = helper.getDiskFormatCrc();
     unsigned projectedCrc = helper.getProjectedFormatCrc();
-    IDiskRowReader * reader = ensureRowReader(format, false, expectedCrc, *expectedDiskMeta, projectedCrc, *projectedDiskMeta, expectedCrc, *expectedDiskMeta, fileInfo->formatOptions);
-    if (reader->setInputFile(filename, logicalFileName, 0, offsetOfPart, fileInfo->providerOptions, fieldFilters))
+    // MORE: Should this pass in expected as actual?
+    IRowReadFormatMapping * mapping = createRowReadFormatMapping(getLayoutTranslationMode(), format, expectedCrc, *expectedDiskMeta, expectedCrc, *expectedDiskMeta, projectedCrc, *projectedDiskMeta, formatOptions);
+    // MORE: What is the meaning of nodes?
+    INewRowProvider * provider = createRowProvider(logicalFileName, providerOptions, 1, 1, false);
+    if (provider)
     {
-        initStream(reader, filename);
+        initStream(provider, mapping);
         return true;
     }
     return false;
@@ -11213,6 +11198,8 @@ bool CHThorNewDiskReadBaseActivity::openFilePart(ILocalOrDistributedFile * local
      * Otherwise failover to the legacy remote access.
      */
     const char * format = helper.queryFormat();   // more - should extract from the current file (could even mix flat and csv...)
+    if (format)
+        providerOptions->setProp("@providerType", format);
     Owned<IException> saveOpenExc;
     StringBuffer filename, filenamelist;
     std::vector<unsigned> remoteCandidates;
@@ -11228,10 +11215,11 @@ bool CHThorNewDiskReadBaseActivity::openFilePart(ILocalOrDistributedFile * local
         {
             StringBuffer path;
             rfn.getPath(path);
-            IDiskRowReader * reader = ensureRowReader(format, false, expectedCrc, *expectedDiskMeta, projectedCrc, *projectedDiskMeta, actualCrc, *actualDiskMeta, fileInfo->formatOptions);
-            if (reader->setInputFile(path.str(), logicalFileName, whichPart, offsetOfPart, fileInfo->providerOptions, fieldFilters))
+            IRowReadFormatMapping * mapping = createRowReadFormatMapping(getLayoutTranslationMode(), format, actualCrc, *actualDiskMeta, expectedCrc, *expectedDiskMeta, projectedCrc, *projectedDiskMeta, fileInfo->formatOptions);
+            INewRowProvider * provider = createRowProvider(logicalFileName, providerOptions, 1, 1, false);
+            if (provider)
             {
-                initStream(reader, path.str());
+                initStream(provider, mapping);
                 return true;
             }
         }
@@ -11251,10 +11239,11 @@ bool CHThorNewDiskReadBaseActivity::openFilePart(ILocalOrDistributedFile * local
             filenamelist.append('\n').append(filename);
             try
             {
-                IDiskRowReader * reader = ensureRowReader(format, tryRemoteStream, expectedCrc, *expectedDiskMeta, projectedCrc, *projectedDiskMeta, actualCrc, *actualDiskMeta, fileInfo->formatOptions);
-                if (reader->setInputFile(rfilename, logicalFileName, whichPart, offsetOfPart, fileInfo->providerOptions, fieldFilters))
+                IRowReadFormatMapping * mapping = createRowReadFormatMapping(getLayoutTranslationMode(), format, actualCrc, *actualDiskMeta, expectedCrc, *expectedDiskMeta, projectedCrc, *projectedDiskMeta, fileInfo->formatOptions);
+                INewRowProvider * provider = createRowProvider(logicalFileName, providerOptions, 1, 1, false);
+                if (provider)
                 {
-                    initStream(reader, filename);
+                    initStream(provider, mapping);
                     return true;
                 }
             }
