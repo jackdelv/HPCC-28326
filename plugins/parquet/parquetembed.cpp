@@ -805,7 +805,7 @@ arrow::Status ParquetWriter::fieldToNode(const RtlFieldInfo *field, std::vector<
         }
         break;
     case type_decimal:
-        arrowFields.push_back(std::make_shared<arrow::Field>(name.str(), arrow::decimal(field->type->getDecimalDigits(), field->type->getDecimalPrecision())));
+        arrowFields.push_back(std::make_shared<arrow::Field>(name.str(), arrow::smallest_decimal(field->type->getDecimalDigits(), field->type->getDecimalPrecision())));
         break;
     case type_data:
         if (field->type->length > 0)
